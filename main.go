@@ -1,80 +1,133 @@
 package main
 
 import (
-	"fmt"
+	"github.com/labstack/gommon/log"
 	"os"
 	"sourcegraph.com/sourcegraph/go-selenium"
+	"time"
 )
+
+const LOGIN_URL = "https://entry11.bk.mufg.jp/ibg/dfw/APLIN/loginib/login?_TRANID=AA000_001"
 
 func main() {
 	var webDriver selenium.WebDriver
 	var err error
 	caps := selenium.Capabilities(map[string]interface{}{"browserName": "chrome"})
 	if webDriver, err = selenium.NewRemote(caps, os.Getenv("SELENIUM_URL")); err != nil {
-		fmt.Printf("Failed to open session: %s\n", err)
+		log.Errorf("Failed to open session: %s", err)
 		return
 	}
 	defer webDriver.Quit()
 
-	err = webDriver.Get("https://entry11.bk.mufg.jp/ibg/dfw/APLIN/loginib/login?_TRANID=AA000_001")
-	if err != nil {
-		fmt.Printf("Failed to load page: %s\n", err)
+	webDriver.SetImplicitWaitTimeout(5000)
+
+	if err = webDriver.Get(LOGIN_URL); err != nil {
+		log.Errorf("Failed to load page: url:%s error:%s", LOGIN_URL, err)
 		return
 	}
 
-	if title, err := webDriver.Title(); err == nil {
-		fmt.Printf("Page title: %s\n", title)
+	if title, err := webDriver.Title(); err != nil {
+		log.Errorf("Failed to get page title: %s", err)
+		save(webDriver, "error")
+		return
 	} else {
-		fmt.Printf("Failed to get page title: %s", err)
-		return
+		log.Infof("Page title: %s", title)
 	}
 
-	setVal(webDriver, "account_id", os.Getenv("MUFG_ID"))
-	setVal(webDriver, "ib_password", os.Getenv("MUFG_PASSWORD"))
-	click(webDriver, "admb_m")
+	// ログイン
+	if elem, err := webDriver.FindElement(selenium.ById, "account_id"); err != nil {
+		log.Errorf("Failed to find element: id:%s error:%s", "account_id", err)
+		save(webDriver, "error")
+		return
+	} else {
+		elem.SendKeys(os.Getenv("MUFG_ID"))
+	}
 
-	// Onetime
-	elem, err := webDriver.FindElement(selenium.ById, "onetime_password")
-	if err == nil {
-		println("Need Onetime")
+	if elem, err := webDriver.FindElement(selenium.ById, "ib_password"); err != nil {
+		log.Errorf("Failed to find element: id:%s error:%s", "ib_password", err)
+		save(webDriver, "error")
+		return
+	} else {
+		elem.SendKeys(os.Getenv("MUFG_PASSWORD"))
+	}
+
+	if elem, err := webDriver.FindElement(selenium.ByClassName, "admb_m"); err != nil {
+		log.Errorf("Failed to find element: className:%s error:%s", "admb_m", err)
+		save(webDriver, "error")
+		return
+	} else {
+		elem.Click()
+		time.Sleep(2 * time.Second)
+	}
+
+	// ワンタイムパスワード
+	if elem, err := webDriver.FindElement(selenium.ById, "ib_password"); err != nil {
+		log.Infof("Don't need onetime login")
+	} else {
+		log.Infof("Need onetime login")
 		elem.SendKeys(os.Getenv("MUFG_ONETIME"))
-		btn, err := webDriver.FindElement(selenium.ByCSSSelector, ".buttons a")
-		if err != nil {
-			fmt.Printf("Failed to find element: %s\n", err)
+		if btn, err := webDriver.FindElement(selenium.ByCSSSelector, ".buttons a"); err != nil {
+			log.Errorf("Failed to find element: selector:%s error:%s", ".buttons a", err)
+			save(webDriver, "error")
 			return
-		}
-		btn.Click()
-	}
-
-	amount, err := webDriver.FindElement(selenium.ById, "setAmountDisplay")
-	if err != nil {
-		fmt.Printf("Failed to find element: %s\n", err)
-		if title, err := webDriver.Title(); err == nil {
-			fmt.Printf("Page title: %s\n", title)
 		} else {
-			fmt.Printf("Failed to get page title: %s", err)
-			return
+			btn.Click()
+			time.Sleep(2 * time.Second)
 		}
-		return
 	}
-	text, _ := amount.Text()
-	println(text)
+
+	// TODO: お知らせを既読にする
+
+	// 残高取得
+	if amount, err := webDriver.FindElement(selenium.ById, "setAmountDisplay"); err != nil {
+		log.Errorf("Failed to find element: id:%s error:%s", "setAmountDisplay", err)
+		save(webDriver, "error")
+		return
+	} else {
+		if text, err := amount.Text(); err != nil {
+			log.Error(err)
+			save(webDriver, "error")
+		} else {
+			log.Infof(text)
+		}
+	}
+
+	// ログアウト
+	if btn, err := webDriver.FindElement(selenium.ByCSSSelector, ".logout a"); err != nil {
+		log.Errorf("Failed to find element: selector:%s error:%s", ".buttons a", err)
+		save(webDriver, "error")
+		return
+	} else {
+		btn.Click()
+		time.Sleep(2 * time.Second)
+	}
 }
 
-func setVal(webDriver selenium.WebDriver, id string, val string) {
-	elem, err := webDriver.FindElement(selenium.ById, id)
-	if err != nil {
-		fmt.Printf("Failed to find element: %s\n", err)
-		return
+func save(webDriver selenium.WebDriver, id string) {
+	// Save Page title
+	if title, err := webDriver.Title(); err == nil {
+		log.Infof("Page title: %s", title)
 	}
-	elem.SendKeys(val)
-}
 
-func click(webDriver selenium.WebDriver, id string) {
-	elem, err := webDriver.FindElement(selenium.ByClassName, id)
-	if err != nil {
-		fmt.Printf("Failed to find element: %s\n", err)
-		return
+	// Save Page source
+	if data, err := webDriver.PageSource(); err != nil {
+		log.Error(err)
+	} else {
+		if fo, err := os.Create("output-" + id + ".html"); err != nil {
+			log.Error(err)
+		} else {
+			fo.Write([]byte(data))
+		}
 	}
-	elem.Click()
+
+	// Save Screenshot
+	if data, err := webDriver.Screenshot(); err != nil {
+		log.Error(err)
+	} else {
+		if fo, err := os.Create("output-" + id + ".png"); err != nil {
+			log.Error(err)
+		} else {
+			fo.Write(data)
+		}
+	}
 }
